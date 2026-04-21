@@ -57,4 +57,13 @@ sudo docker run hello-world
       bioconductor/bioconductor_docker:RELEASE_3_21-r-4.5.2
      ```
    - W przeglądarce (`http://localhost:8789`) powinno być dostępne Rstudio. Nazwa użytkownika to domyślnie `rstudio`.
-6. Instalacja pakietów - w *terminalu* należy wykonać komendę `Rscript install.R`
+6. Przygotowanie do zajęć:
+   - Klonowanie repozytorium:
+   ```
+   git clone https://github.com/SBaluszek/kfnrd2026.git
+   ```
+   - Instalacja pakietów - w _terminalu_ należy wykonać komendy:
+   ```
+   cd kfnrd2026
+   Rscript install.R
+   ```
