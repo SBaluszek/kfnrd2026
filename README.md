@@ -52,7 +52,7 @@ sudo docker run hello-world
      sudo docker run \
       -e PASSWORD='TwojeHas£o' \
       -e ROOT=TRUE \
-      -v /home/sbaluszek/rstudio:/home/rstudio/projects \
+      -v ~/rstudio:/home/rstudio/projects \
       -p 8789:8787 \
       bioconductor/bioconductor_docker:RELEASE_3_21-r-4.5.2
      ```
