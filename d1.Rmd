@@ -4,25 +4,25 @@ output: html_notebook
 ---
 
 ```{r}
-library(tidyverse)
+library(data.table)
+library(dplyr)
 library(Biostrings)
 library(stringdist)
+library(stringr)
+library(QuasR)
+library(purrr)
 ```
+
 ```{r}
 lear = fread("lear.csv")
 lear
 ```
 
 ```{r}
-
-```
-
-
-```{r}
 reference = lear %>%
   filter(!is.na(line_number)) %>% 
   mutate(dialogue = str_squish(dialogue),
-         line_id = paste0("line", reference$line_number))
+         line_id = paste0("line", line_number))
 
 generateContingencyTable = function(text, letters = DNA_ALPHABET[1:4]){
   allLetters = text %>% strsplit("") %>% unlist() %>% unique()
@@ -68,15 +68,12 @@ reference = reference %>% mutate(seq = sapply(dialogue, encodeDNA, encoder = con
 reference
 ```
 
-
-
 ```{r}
 dna = DNAStringSet(reference$seq)
 names(dna) = reference$line_id
 
 writeXStringSet(dna, filepath = "lear_reference.fa")
 ```
-
 
 ```{r}
 make_read = function(text, length = 10) {
@@ -131,7 +128,6 @@ lines = rbind(
 lines
 ```
 
-
 ```{r}
 con = file("lear_reads_1.fq", open = "w")
 
@@ -160,10 +156,6 @@ close(con)
 # close(con)
 ```
 
-
-
-
-
 ```{r}
 sample_file = tibble(
   # FileName1   = "lear_reads_1.fq",
@@ -172,15 +164,12 @@ sample_file = tibble(
   SampleName = "KingLear"
 )
 
-write_tsv(sample_file, "sample_file.txt")
+fwrite(sample_file, file = "sample_file.txt", sep = "\t")
 ```
-
 
 ```{r}
 proj = qAlign("sample_file.txt", genome = "lear_reference.fa", aligner = "Rhisat2", maxHits = 5)
 ```
-
-
 
 ```{r}
 qQCReport(proj, "qc_report.pdf")
@@ -188,9 +177,18 @@ qQCReport(proj, "qc_report.pdf")
 
 
 
-
 ```{r}
 bam = Rsamtools::scanBam(file = proj@alignments$FileName)
-bam %>% data.frame()
+bam = bam %>% data.frame()
+bam
+```
+
+
+```{r}
+bam %>% dplyr::select(qname, seq, rname, pos, qwidth) %>% 
+  dplyr::rename(line_id = rname, readSeq = seq) %>% 
+  left_join(reference %>% select(line_id, seq)) %>%
+  mutate(seq = substr(seq, pos, pos + qwidth - 1),
+         flag = readSeq == seq)
 ```
 
