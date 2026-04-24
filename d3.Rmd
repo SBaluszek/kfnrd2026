@@ -1,0 +1,376 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+library(data.table)
+library(dplyr)
+library(tibble)
+library(DESeq2)
+library(ggplot2)
+library(viridis)
+```
+
+```{r}
+pcaMarchenkoPastur <- function(nGenes, nCells, pca.sdev, factor=1, do.print=T) {
+  pca.eigenvalue <- (pca.sdev)^2
+  
+  marchenko.pastur.max <- (1+sqrt(nGenes / nCells))^2
+  pca.sig <- pca.eigenvalue > (marchenko.pastur.max * factor)
+  if (do.print) {
+    print(paste("Marchenko-Pastur eigenvalue null upper bound:", signif(marchenko.pastur.max,3), "from gamma: ", signif(nGenes / nCells, 3)))
+    if (factor != 1) {
+      print(paste(length(which(pca.sig)), "PCs have eigenvalues larger than", factor, "times null upper bound."))
+    } else {
+      print(paste(length(which(pca.eigenvalue > marchenko.pastur.max)), "PCs have larger eigenvalues."))
+    }
+  }
+  return(pca.sig)
+}
+```
+
+```{r}
+gtf = rtracklayer::import("/home/rstudio/projects/data/genomes/GRCh38/genecode/gencode.v49.chr_patch_hapl_scaff.annotation.gtf")
+
+```
+
+```{r}
+gtf %>% data.frame() %>% filter(type == "gene") %>% select(gene_name, gene_type, gene_id, seqnames, strand, start, end, width) %>% 
+  fwrite("genes.csv")
+```
+
+```{r}
+dim(X)
+```
+
+```{r}
+counts = arrow::read_parquet("ChordomaCounts.parquet") %>% column_to_rownames("GeneID") %>% as.matrix()
+counts[1:10,1:10]
+```
+
+```{r}
+genes = fread("genes.csv")
+genes
+```
+
+
+
+```{r}
+cd = fread('clinicalData.csv')
+cd
+```
+
+
+
+```{r}
+setdiff(colnames(counts), cd$PATIENT_ID)
+```
+
+```{r}
+round( colSums(assay(ds)) / 1e6, 1 )
+```
+
+```{r}
+ds <- DESeqDataSetFromMatrix(countData = counts,
+                              colData = cd %>% mutate(TYPE = factor(TYPE)),
+                              design= ~ TYPE)
+```
+
+
+```{r}
+nrow(ds)
+smallestGroupSize = 4
+keep <- rowSums(counts(ds) > 10) >= (smallestGroupSize)
+ds <- ds[keep,]
+nrow(ds)
+```
+```{r}
+ds <- DESeq(ds)
+```
+
+
+```{r}
+library(vsn)
+meanSdPlot(log(assay(ds) + 1), ranks = FALSE)
+```
+
+
+
+```{r}
+vsd <- vst(ds, blind = FALSE)
+```
+
+```{r}
+rld <- rlog(ds, blind = FALSE)
+```
+
+```{r}
+df <- bind_rows(
+  as_data_frame(log2(counts(ds, normalized=TRUE)[, 1:2]+1)) %>%
+         mutate(transformation = "log2(x + 1)"),
+  as_data_frame(assay(vsd)[, 1:2]) %>% mutate(transformation = "vst"),
+  as_data_frame(assay(rld)[, 1:2]) %>% mutate(transformation = "rlog"))
+
+
+colnames(df)[1:2] <- c("x", "y")  
+
+lvls <- c("log2(x + 1)", "vst", "rlog")
+df$transformation <- factor(df$transformation, levels=lvls)
+
+ggplot(df, aes(x = x, y = y)) + geom_hex(bins = 80) +
+  coord_fixed() + facet_grid( . ~ transformation) +
+  labs(x = "Sample1", y = "Sample2")
+```
+
+```{r}
+sampleDists <- dist(t(assay(vsd)))
+
+library("pheatmap")
+library("RColorBrewer")
+
+
+sampleDistMatrix <- as.matrix( sampleDists )
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+```
+
+```{r}
+pca = assay(vsd) %>% t() %>% scale() %>% prcomp()
+pcaData = pca$x %>% data.frame() %>% rownames_to_column("PATIENT_ID") %>% 
+  left_join(cd)
+```
+```{r}
+cd %>% pull(TYPE) %>% table()
+```
+
+
+
+```{r}
+
+
+ggplot(pcaData, aes(x = PC1, y = PC2, color = METHYLATION_CLUSTER, shape = TYPE)) +
+  geom_point(size =3, alpha = .5) +
+  xlab(paste0("PC1: ", signif(100*pca$sdev[1]/sum(pca$sdev),4), "% variance")) +
+  ylab(paste0("PC2: ", signif(100*pca$sdev[2]/sum(pca$sdev),4), "% variance")) +
+  coord_fixed() +
+  ggtitle("PCA with VST data") +
+  theme_bw() + theme(panel.grid = element_blank())
+```
+```{r}
+pcaData = pcaData %>% mutate(depth = colSums(counts)[as.character(PATIENT_ID)])
+
+ggplot(pcaData, aes(x = PC1, y = PC2, color = depth, shape = TYPE)) +
+  geom_point(size =3, alpha = .5) +
+  xlab(paste0("PC1: ", signif(100*pca$sdev[1]/sum(pca$sdev),4), "% variance")) +
+  ylab(paste0("PC2: ", signif(100*pca$sdev[2]/sum(pca$sdev),4), "% variance")) +
+  coord_fixed() +
+  scale_color_gradientn(colours = viridis::viridis(10), trans = "log10") +
+  ggtitle("PCA with VST data") +
+  theme_bw() + theme(panel.grid = element_blank())
+```
+
+
+```{r}
+vardev = data.frame(sd = pca$sdev) %>% 
+  mutate(rank = 1:n())
+
+myPick = 11
+vardev$mp = pcaMarchenkoPastur(nGenes = nrow(counts), nCells = ncol(counts), pca$sdev)
+vardev$cumulative = cumsum(vardev$sd) / max(cumsum(vardev$sd))
+
+p1 = vardev %>% 
+  ggplot() +
+  geom_line(aes(x = rank, y = sd)) +
+  geom_point(aes(x = rank, y = sd, color = mp)) +
+  geom_vline(xintercept = myPick, lty = 2, color = "gold") +
+  theme_bw()
+
+p2 = vardev %>% 
+  ggplot() +
+  geom_hline(yintercept = 0.75, lty = 2, color = "blue") +
+  geom_vline(xintercept = myPick, lty = 2, color = "gold") +
+  geom_line(aes(x = rank, y = cumulative)) +
+  geom_point(aes(x = rank, y = cumulative, color = mp)) +
+  theme_bw()
+library(patchwork)
+p1 / p2
+```
+
+```{r}
+library(uwot)
+ump = uwot::umap(pca$x[,1:myPick], n_neighbors = 4) %>% data.frame()
+colnames(ump) = c("UMAP1", "UMAP2")
+pcaData = pcaData %>% left_join(ump %>% rownames_to_column("PATIENT_ID"))
+```
+
+```{r}
+ggplot(pcaData, aes(y = UMAP1, x = UMAP2, color = METHYLATION_CLUSTER, shape = TYPE)) +
+  geom_point(size =3, alpha = .5) +
+  # xlab(paste0("PC1: ", signif(100*pca$sdev[1]/sum(pca$sdev),4), "% variance")) +
+  # ylab(paste0("PC2: ", signif(100*pca$sdev[2]/sum(pca$sdev),4), "% variance")) +
+  coord_fixed() +
+  ggtitle("UMAP with VST data") +
+  theme_bw() + theme(panel.grid = element_blank())
+```
+
+
+
+```{r}
+
+res <- results(ds, contrast = c("TYPE", "chordoma", "control"))
+res = res %>% data.frame() %>% 
+  rownames_to_column("gene_id") %>% 
+  left_join(genes) %>% 
+  arrange(pvalue)
+res
+```
+```{r}
+res %>% filter(gene_name == "TBXT")
+```
+
+
+```{r}
+topGene =  res$gene_id[1] 
+topGene
+```
+
+```{r}
+pcaData$topGene = assay(vsd)[topGene,pcaData$PATIENT_ID]
+```
+
+```{r}
+ggplot(pcaData, aes(x = PC1, y = PC2, color = topGene, shape = TYPE)) +
+  geom_point(size =3, alpha = .5) +
+  xlab(paste0("PC1: ", signif(100*pca$sdev[1]/sum(pca$sdev),4), "% variance")) +
+  ylab(paste0("PC2: ", signif(100*pca$sdev[2]/sum(pca$sdev),4), "% variance")) +
+  coord_fixed() +
+  scale_color_gradientn(colours = viridis::viridis(10), name = genes$gene_name[genes$gene_id == topGene]) +
+  ggtitle("PCA with VST data") +
+  theme_bw() + theme(panel.grid = element_blank())
+```
+
+```{r}
+ggplot(pcaData, aes(x = TYPE, y = topGene, color = METHYLATION_CLUSTER)) +
+  geom_jitter(width = 0.2, height = 0, alpha = 0.5, stroke = 0, size = 2) +
+  ggtitle("PCA with VST data") +
+  theme_bw() + theme(panel.grid = element_blank()) +
+  labs(x = "group", y = sprintf("%s VST-transformed expression level", genes$gene_name[genes$gene_id == topGene]))
+```
+
+```{r}
+
+```
+
+
+
+```{r}
+auc = assay(vsd)[,c(cd$PATIENT_ID[cd$TYPE == "chordoma"], cd$PATIENT_ID[cd$TYPE == "control"])]
+
+auc = apply(auc, 1, lightAUC,
+            actuals = as.numeric(cd$TYPE[match(colnames(auc), cd$PATIENT_ID)] == "chordoma"))
+
+res$auc = auc[res$gene_id]
+
+res = res %>% arrange(-abs(auc - 0.5))
+res
+```
+
+```{r}
+topGene = res$gene_id[20]
+pcaData$topGene = assay(vsd)[topGene,pcaData$PATIENT_ID]
+```
+
+```{r}
+ggplot(pcaData, aes(x = PC1, y = PC2, color = topGene, shape = TYPE)) +
+  geom_point(size =3, alpha = .5) +
+  xlab(paste0("PC1: ", signif(100*pca$sdev[1]/sum(pca$sdev),4), "% variance")) +
+  ylab(paste0("PC2: ", signif(100*pca$sdev[2]/sum(pca$sdev),4), "% variance")) +
+  coord_fixed() +
+  scale_color_gradientn(colours = viridis::viridis(10)) +
+  ggtitle("PCA with VST data") +
+  theme_bw() + theme(panel.grid = element_blank())
+```
+
+```{r}
+ggplot(pcaData, aes(x = TYPE, y = topGene, color = METHYLATION_CLUSTER)) +
+  geom_jitter(width = 0.2, height = 0, alpha = 0.5, stroke = 0, size = 2) +
+  ggtitle("PCA with VST data") +
+  theme_bw() + theme(panel.grid = element_blank()) +
+  labs(x = "group", y = sprintf("%s VST-transformed expression level", genes$Hugo_Symbol[genes$GeneID == topGene]))
+```
+
+
+```{r}
+resultsNames(ds)
+```
+
+
+```{r}
+ape <- results(ds, name="TYPE_control_vs_chordoma")
+plotMA(ape, ylim = c(-5, 5))
+```
+```{r}
+library(msigdbr)
+library(fgsea)
+```
+
+```{r}
+rct = msigdbr(subcollection = "REACTOME")
+rct
+```
+```{r}
+res = res %>% mutate(ensembl_gene = tstrsplit(gene_id, "\\.")[[1]]) 
+```
+
+```{r}
+dim(rct)
+rct = rct %>% filter(ensembl_gene %in% res$ensembl_gene)
+dim(rct)
+tmp = rct %>% pull(gs_name) %>% table()
+tmp = names(tmp[tmp > 4])
+rct = rct %>% filter(gs_name %in% tmp)
+dim(rct)
+```
+
+```{r}
+Q = res %>% select(ensembl_gene, stat) %>% deframe()
+gs = split(rct$ensembl_gene, rct$gs_name)
+gsea = fgseaMultilevel(gs, Q, minSize = 5)
+gsea = gsea %>% arrange(pval)
+```
+
+```{r}
+myPathway = gsea$pathway[1]
+```
+
+
+
+```{r}
+plotEnrichment(gs[[myPathway]],
+               Q) + labs(title=myPathway)
+```
+
+```{r}
+topPathwaysUp <- gsea[ES > 0][head(order(pval), n=8), pathway]
+topPathwaysDown <- gsea[ES < 0][head(order(pval), n=8), pathway]
+topPathways <- c(topPathwaysUp, rev(topPathwaysDown))
+plotGseaTable(gs[topPathways], Q, gsea, gseaParam=0.5)
+```
+```{r}
+gesecaRes = geseca(pathways=gs, E=counts, minSize = 5, maxSize = 1000)
+gesecaRes
+```
+
+
+```{r}
+?geseca
+```
+
+
+

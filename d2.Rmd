@@ -1,0 +1,196 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+BiocManager::install("maftools")
+BiocManager::install("PoisonAlien/TCGAmutations")
+BiocManager::install("BSgenome.Hsapiens.UCSC.hg19")
+```
+
+
+```{r}
+library(maftools)
+library(TCGAmutations)
+library(dplyr)
+library(data.table)
+```
+
+```{r}
+mySet = "LGG"
+```
+
+
+```{r}
+tcga_available() %>% 
+  filter(Study_Abbreviation == mySet)
+```
+```{r}
+maf <- TCGAmutations::tcga_load(study = mySet, source = "Firehose")
+maf
+```
+
+```{r}
+plotmafSummary(maf = maf, rmOutlier = TRUE, addStat = 'median', dashboard = TRUE, titvRaw = FALSE)
+```
+```{r}
+oncoplot(maf = maf, top = 10)
+```
+```{r}
+titv = titv(maf = maf, plot = FALSE, useSyn = TRUE)
+plotTiTv(res = titv)
+```
+
+```{r}
+myGene = "IDH1"
+```
+
+
+```{r}
+lollipopPlot(
+  maf = maf,
+  gene = myGene,
+  AACol = 'Protein_Change',
+  showMutationRate = TRUE,
+  #labelPos = 882
+)
+```
+Osoba, ktora ma BRCA powinna sprobowac mySample = "TCGA-A8-A08B"
+
+```{r}
+#maf@clinical.data$Tumor_Sample_Barcode
+mySample = maf@clinical.data$Tumor_Sample_Barcode[10]
+```
+
+
+
+```{r}
+rainfallPlot(maf = maf, detectChangePoints = TRUE, pointSize = 0.4, tsb = mySample)
+```
+
+
+
+```{r}
+plotVaf(maf = maf)
+```
+```{r}
+het = inferHeterogeneity(maf = maf, tsb = mySample)
+plotClusters(clusters = het)
+```
+
+```{r}
+somaticInteractions(maf = maf, top = 20, pvalue = c(0.01, 0.05))
+```
+
+
+
+```{r}
+sig = oncodrive(maf = maf, AACol = 'Protein_Change', minMut = 5,
+                bgEstimate = FALSE,
+                pvalMethod = 'zscore')
+```
+
+```{r}
+plotOncodrive(res = sig, fdrCutOff = 0.1, useFraction = TRUE, labelSize = 0.5)
+```
+
+Dla kontekstu, warto sprawdzic: https://pmc.ncbi.nlm.nih.gov/articles/PMC4982675/
+```{r}
+pfam = pfamDomains(maf = maf, AACol = 'Protein_Change', top = 10)
+```
+
+```{r}
+#mafSurvival(maf = maf, genes = myGene)
+```
+
+
+```{r}
+maf@clinical.data = maf@clinical.data %>% mutate(
+  days_to_last_followup = as.numeric(as.character(days_to_last_followup)),
+  days_to_death = as.numeric(as.character(days_to_death)),
+  survTime = ifelse(is.na(days_to_death), days_to_last_followup, days_to_death),
+  survStatus = ifelse(is.na(days_to_death), 0, 1))
+```
+
+
+```{r}
+
+mafSurvival(maf = maf, genes = myGene, time = 'survTime', Status = 'survStatus', isTCGA = FALSE)
+
+```
+
+
+
+```{r}
+maf@clinical.data
+```
+```{r}
+m1 = maf@clinical.data %>% filter(histological_type == "Astrocytoma") %>% pull(Tumor_Sample_Barcode)
+m1 = subsetMaf(maf, tsb = m1)
+m2 = maf@clinical.data %>% filter(histological_type == "Oligodendroglioma") %>% pull(Tumor_Sample_Barcode)
+m2 = subsetMaf(maf, tsb = m2)
+
+comp = mafCompare(m1 = m1, m2 = m2, m1Name = 'astro', m2Name = 'oligo', minMut = 5)
+
+
+```
+
+```{r}
+p = forestPlot(mafCompareRes = comp, pVal = 0.01)
+```
+```{r}
+genes = c(comp$results %>% filter(pval < 0.01) %>% pull("Hugo_Symbol"), "IDH1")
+coOncoplot(m1 = m1, m2 = m2, m1Name = 'astr', m2Name = 'oligo', removeNonMutated = TRUE, genes = genes)
+```
+
+
+```{r}
+feat = clinicalEnrichment(maf = maf, clinicalFeature = 'histological_type')
+feat
+```
+
+```{r}
+plotEnrichmentResults(enrich_res = feat, pVal = 0.05, geneFontSize = 0.5, annoFontSize = 0.6)
+```
+
+```{r}
+pws = pathways(maf = maf, plotType = 'bar')
+```
+```{r}
+plotPathways(maf = maf, pathlist = pws)
+```
+```{r}
+mutload = tcgaCompare(maf = maf, cohortName = sprintf('Example-%s', mySet), logscale = TRUE, capture_size = 50)
+```
+
+```{r}
+maf@data
+```
+
+
+```{r}
+tnm = trinucleotideMatrix(maf = maf, prefix = 'chr', add = TRUE, ref_genome = "BSgenome.Hsapiens.UCSC.hg19")
+plotApobecDiff(tnm = tnm, maf = maf, pVal = 0.05)
+```
+
+```{r}
+library('NMF')
+sign = estimateSignatures(mat = tnm, nTry = 6)
+```
+```{r}
+sig = extractSignatures(mat = tnm, n = 4)
+```
+```{r}
+cosm = compareSignatures(nmfRes = sig, sig_db = "SBS")
+library('pheatmap')
+pheatmap::pheatmap(mat = cosm$cosine_similarities, cluster_rows = TRUE, main = "cosine similarity against validated signatures")
+
+```
+
+```{r}
+maftools::plotSignatures(nmfRes = sig, title_size = 1.2, sig_db = "SBS")
+```
+
+
+

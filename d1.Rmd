@@ -1,0 +1,196 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(Biostrings)
+library(stringdist)
+```
+```{r}
+lear = fread("lear.csv")
+lear
+```
+
+```{r}
+
+```
+
+
+```{r}
+reference = lear %>%
+  filter(!is.na(line_number)) %>% 
+  mutate(dialogue = str_squish(dialogue),
+         line_id = paste0("line", reference$line_number))
+
+generateContingencyTable = function(text, letters = DNA_ALPHABET[1:4]){
+  allLetters = text %>% strsplit("") %>% unlist() %>% unique()
+  n = ceiling(length(allLetters) %>% log(base = 4))
+  allLetters = allLetters[order(allLetters)]
+  
+  res = apply(gtools::permutations(n = length(letters), r = n, v = letters, repeats.allowed = TRUE),
+              1, paste0, collapse = "")
+  if(length(allLetters) < length(res)){
+    allLetters = c(allLetters, sample(allLetters, length(res) - length(allLetters), replace = TRUE))
+  }
+  res = setNames(res, allLetters)
+  return(res)
+}
+  
+
+
+conT = generateContingencyTable(reference %>% pull(dialogue))
+
+conT
+```
+
+```{r}
+encodeDNA = function(text, encoder) {
+  chars_vec = unlist(strsplit(text, ""))
+  paste0(encoder[chars_vec], collapse = "")
+}
+
+decodeDNA = function(dna, encoder) {
+  decoder   = setNames(names(encoder), encoder)
+  codons_vec = str_extract_all(dna, "...")[[1]]
+  paste0(decoder[codons_vec], collapse = "")
+}
+```
+
+```{r}
+reference %>% mutate(seq = sapply(dialogue, encodeDNA, encoder = conT),
+                     tmp = sapply(seq, decodeDNA, encoder = conT)) %>% 
+  filter(!tmp == dialogue)
+```
+```{r}
+reference = reference %>% mutate(seq = sapply(dialogue, encodeDNA, encoder = conT))
+reference
+```
+
+
+
+```{r}
+dna = DNAStringSet(reference$seq)
+names(dna) = reference$line_id
+
+writeXStringSet(dna, filepath = "lear_reference.fa")
+```
+
+
+```{r}
+make_read = function(text, length = 10) {
+  if (nchar(text) <= length) return(text)
+  start = sample(1:(nchar(text) - length + 1), 1)
+  substr(text, start, start + length - 1)
+}
+
+mutate_read = function(text, length, k) {
+  if(k == 0){
+    return(make_read(text, length))
+  } else {
+    text  = make_read(text, length)
+    pos   = sample(1:nchar(text), 1)
+    org = substr(text, pos, pos)
+    substr(text, pos, pos) = sample(setdiff(c("A", "C", "G", "T"), org), 1)
+    mutate_read(text, length, k-1)
+  }
+}
+
+indel_read = function(text, length, k) {
+  text  = make_read(text, length + k)
+  start = sample(1:(nchar(text) - k + 1), 1)
+  paste0(substr(text, 1, start - 1), substr(text, start + k, nchar(text)))
+}
+
+mutate_read(paste0(letters[1:10], collapse = ""), 7, 3)
+indel_read(paste0(letters[1:10], collapse = ""), 7, 3)
+```
+
+```{r}
+set.seed(2026)
+lines = reference %>% filter(nchar(seq) > 55) %>% slice_sample(n = 8)
+lines = lines %>% mutate(k = sample(1:2, 8, replace = TRUE))
+
+lines = rbind(
+  lines %>% mutate(
+      read_id = paste0("line_", line_number, "_perfect"),
+      read_seq = map_chr(seq, make_read, length = 50),
+      read_type = "perfect"),
+
+  lines %>% mutate(
+      read_id = paste0("line_", line_number, "_mutated_", k),
+      read_seq = map2_chr(seq, k, ~mutate_read(.x, length = 50, k = .y)),
+      read_type = "mutated"),
+
+  lines %>% mutate(
+      read_id = paste0("line_", line_number, "_indel_", k),
+      read_seq = map2_chr(seq, k, ~indel_read(.x, length = 50, k = .y)),
+      read_type = "indel")) 
+
+lines
+```
+
+
+```{r}
+con = file("lear_reads_1.fq", open = "w")
+
+walk(seq_len(nrow(lines)), function(i) {
+  writeLines(c(
+    paste0("@", lines$read_id[i]),          # header
+    lines$read_seq[i],                       # sequence
+    "+",                                     # separator
+    paste0(LETTERS[round(pmin(9, pmax(1, rnorm(nchar(lines$read_seq[i]), 9, 2))))], collapse = "") # quality scores
+  ), con)
+})
+
+close(con)
+
+# con = file("lear_reads_2.fq", open = "w")
+# 
+# walk(seq_len(nrow(lines)), function(i) {
+#   writeLines(c(
+#     paste0("@", lines$read_id[i]),          # header
+#     rev(as.character(reverseComplement(DNAString(lines$read_seq[i])))) ,                       # sequence
+#     "+",                                     # separator
+#     paste0(LETTERS[round(pmin(9, pmax(1, rnorm(nchar(lines$read_seq[i]), 9, 2))))], collapse = "") # quality scores
+#   ), con)
+# })
+# 
+# close(con)
+```
+
+
+
+
+
+```{r}
+sample_file = tibble(
+  # FileName1   = "lear_reads_1.fq",
+  # FileName2 =  "lear_reads_2.fq",
+  FileName   = "lear_reads_1.fq",
+  SampleName = "KingLear"
+)
+
+write_tsv(sample_file, "sample_file.txt")
+```
+
+
+```{r}
+proj = qAlign("sample_file.txt", genome = "lear_reference.fa", aligner = "Rhisat2", maxHits = 5)
+```
+
+
+
+```{r}
+qQCReport(proj, "qc_report.pdf")
+```
+
+
+
+
+```{r}
+bam = Rsamtools::scanBam(file = proj@alignments$FileName)
+bam %>% data.frame()
+```
+
