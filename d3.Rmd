@@ -12,6 +12,13 @@ library(tibble)
 library(DESeq2)
 library(ggplot2)
 library(viridis)
+library(msigdbr)
+library(fgsea)
+library(vsn)
+library(pheatmap)
+library(RColorBrewer)
+library(patchwork)
+library(uwot)
 ```
 
 ```{r}
@@ -30,20 +37,6 @@ pcaMarchenkoPastur <- function(nGenes, nCells, pca.sdev, factor=1, do.print=T) {
   }
   return(pca.sig)
 }
-```
-
-```{r}
-gtf = rtracklayer::import("/home/rstudio/projects/data/genomes/GRCh38/genecode/gencode.v49.chr_patch_hapl_scaff.annotation.gtf")
-
-```
-
-```{r}
-gtf %>% data.frame() %>% filter(type == "gene") %>% select(gene_name, gene_type, gene_id, seqnames, strand, start, end, width) %>% 
-  fwrite("genes.csv")
-```
-
-```{r}
-dim(X)
 ```
 
 ```{r}
@@ -69,14 +62,16 @@ cd
 setdiff(colnames(counts), cd$PATIENT_ID)
 ```
 
-```{r}
-round( colSums(assay(ds)) / 1e6, 1 )
-```
+
 
 ```{r}
 ds <- DESeqDataSetFromMatrix(countData = counts,
                               colData = cd %>% mutate(TYPE = factor(TYPE)),
                               design= ~ TYPE)
+```
+
+```{r}
+round( colSums(assay(ds)) / 1e6, 1 )
 ```
 
 
@@ -87,13 +82,13 @@ keep <- rowSums(counts(ds) > 10) >= (smallestGroupSize)
 ds <- ds[keep,]
 nrow(ds)
 ```
+
 ```{r}
 ds <- DESeq(ds)
 ```
 
 
 ```{r}
-library(vsn)
 meanSdPlot(log(assay(ds) + 1), ranks = FALSE)
 ```
 
@@ -127,10 +122,6 @@ ggplot(df, aes(x = x, y = y)) + geom_hex(bins = 80) +
 
 ```{r}
 sampleDists <- dist(t(assay(vsd)))
-
-library("pheatmap")
-library("RColorBrewer")
-
 
 sampleDistMatrix <- as.matrix( sampleDists )
 colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
@@ -198,12 +189,11 @@ p2 = vardev %>%
   geom_line(aes(x = rank, y = cumulative)) +
   geom_point(aes(x = rank, y = cumulative, color = mp)) +
   theme_bw()
-library(patchwork)
+
 p1 / p2
 ```
 
 ```{r}
-library(uwot)
 ump = uwot::umap(pca$x[,1:myPick], n_neighbors = 4) %>% data.frame()
 colnames(ump) = c("UMAP1", "UMAP2")
 pcaData = pcaData %>% left_join(ump %>% rownames_to_column("PATIENT_ID"))
@@ -230,9 +220,7 @@ res = res %>% data.frame() %>%
   arrange(pvalue)
 res
 ```
-```{r}
-res %>% filter(gene_name == "TBXT")
-```
+
 
 
 ```{r}
@@ -263,13 +251,12 @@ ggplot(pcaData, aes(x = TYPE, y = topGene, color = METHYLATION_CLUSTER)) +
   labs(x = "group", y = sprintf("%s VST-transformed expression level", genes$gene_name[genes$gene_id == topGene]))
 ```
 
-```{r}
 
-```
 
 
 
 ```{r}
+library(lightAUC)
 auc = assay(vsd)[,c(cd$PATIENT_ID[cd$TYPE == "chordoma"], cd$PATIENT_ID[cd$TYPE == "control"])]
 
 auc = apply(auc, 1, lightAUC,
@@ -315,10 +302,7 @@ resultsNames(ds)
 ape <- results(ds, name="TYPE_control_vs_chordoma")
 plotMA(ape, ylim = c(-5, 5))
 ```
-```{r}
-library(msigdbr)
-library(fgsea)
-```
+
 
 ```{r}
 rct = msigdbr(subcollection = "REACTOME")
@@ -357,19 +341,51 @@ plotEnrichment(gs[[myPathway]],
 ```
 
 ```{r}
-topPathwaysUp <- gsea[ES > 0][head(order(pval), n=8), pathway]
-topPathwaysDown <- gsea[ES < 0][head(order(pval), n=8), pathway]
+topPathwaysUp <- gsea[ES > 0][head(order(pval), n=6), pathway]
+topPathwaysDown <- gsea[ES < 0][head(order(pval), n=6), pathway]
 topPathways <- c(topPathwaysUp, rev(topPathwaysDown))
 plotGseaTable(gs[topPathways], Q, gsea, gseaParam=0.5)
 ```
 ```{r}
-gesecaRes = geseca(pathways=gs, E=counts, minSize = 5, maxSize = 1000)
+counts2 = counts
+rownames(counts2) = tstrsplit(rownames(counts2), "\\.")[[1]]
+
+gesecaRes = geseca(pathways=gs, E=counts2, minSize = 5, maxSize = 1000)
 gesecaRes
 ```
 
+```{r}
+plotGesecaTable(gesecaRes %>%  head(10), gs, E=counts2)
+```
+
+
 
 ```{r}
-?geseca
+plotGesecaTable(gesecaRes %>% filter(pathway %in% topPathways), gs, E=counts2)
+```
+
+```{r}
+hc = pca$x %>% dist() %>% hclust(method = "ward.D")
+hc %>% plot()
+hc = hc$labels[hc$order]
+```
+
+```{r}
+counts2 = counts2[,hc]
+```
+
+```{r}
+plotGesecaTable(gesecaRes %>% filter(pathway %in% topPathways), gs, E=counts2)
+```
+```{r}
+p = plotGesecaTable(gesecaRes %>% filter(pathway %in% topPathways), gs, E=counts2) +
+  theme_bw() +
+  theme(plot.background = element_rect(fill = "white", color = "white"))
+
+
+p %>% 
+  ggsave(filename = "plotGSEA.png", width = 240, height = 120, units = "mm", scale = 1.5)
+
 ```
 
 

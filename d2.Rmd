@@ -4,17 +4,14 @@ output: html_notebook
 ---
 
 ```{r}
-BiocManager::install("maftools")
-BiocManager::install("PoisonAlien/TCGAmutations")
-BiocManager::install("BSgenome.Hsapiens.UCSC.hg19")
-```
-
-
-```{r}
 library(maftools)
 library(TCGAmutations)
 library(dplyr)
 library(data.table)
+```
+
+```{r}
+tcga_available()
 ```
 
 ```{r}
@@ -30,6 +27,11 @@ tcga_available() %>%
 maf <- TCGAmutations::tcga_load(study = mySet, source = "Firehose")
 maf
 ```
+
+```{r}
+maf@data
+```
+
 
 ```{r}
 plotmafSummary(maf = maf, rmOutlier = TRUE, addStat = 'median', dashboard = TRUE, titvRaw = FALSE)
@@ -164,9 +166,7 @@ plotPathways(maf = maf, pathlist = pws)
 mutload = tcgaCompare(maf = maf, cohortName = sprintf('Example-%s', mySet), logscale = TRUE, capture_size = 50)
 ```
 
-```{r}
-maf@data
-```
+
 
 
 ```{r}
