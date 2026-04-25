@@ -58,8 +58,9 @@ sudo docker run hello-world
      ```
    - W przeglądarce (`http://localhost:8789`) powinno być dostępne Rstudio. Nazwa użytkownika to domyślnie `rstudio`.
 6. Przygotowanie do zajęć:
-   - Klonowanie repozytorium:
+   - Klonowanie repozytorium *w terminalu Rstudio*:
    ```
+   cd /home/rstudio/projects
    git clone https://github.com/SBaluszek/kfnrd2026.git
    ```
    - Instalacja pakietów - w _terminalu_ należy wykonać komendy:
